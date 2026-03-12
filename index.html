@@ -1,0 +1,504 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, addDoc, serverTimestamp, query, onSnapshot } from 'firebase/firestore';
+import { 
+  Globe, Target, FileText, Send, BookOpen, CheckCircle, Info, User, Hash, 
+  ChevronRight, Lightbulb, Type, Languages, Smile, Settings, X, ExternalLink, 
+  Lock, Sparkles, HelpCircle,
+  // SDG 일러스트 대체를 위한 내장 아이콘들 (에러 발생 안함)
+  Users, Utensils, Activity, Equal, Droplet, Sun, TrendingUp, Factory, 
+  ArrowDownUp, Building, RefreshCcw, Waves, Leaf, Scale, Link
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- Data: SDGs (에러 없는 내장 아이콘 매칭) ---
+const sdgs = [
+  { id: 1, shortTitle: "빈곤퇴치", title: "No Poverty", desc: "모든 곳에서 모든 형태의 빈곤 종식", color: "#E5243B", Icon: Users },
+  { id: 2, shortTitle: "기아종식", title: "Zero Hunger", desc: "기아 종식, 식량 안보 달성 및 지속가능한 농업", color: "#DDA63A", Icon: Utensils },
+  { id: 3, shortTitle: "건강과 웰빙", title: "Good Health", desc: "모든 연령층의 건강한 삶 보장 및 복지 증진", color: "#4C9F38", Icon: Activity },
+  { id: 4, shortTitle: "양질의 교육", title: "Quality Education", desc: "모두를 위한 포용적이고 공평한 양질의 교육 보장", color: "#C5192D", Icon: BookOpen },
+  { id: 5, shortTitle: "성평등", title: "Gender Equality", desc: "성평등 달성 및 모든 여성과 여아의 권익 신장", color: "#FF3A21", Icon: Equal },
+  { id: 6, shortTitle: "물과 위생", title: "Clean Water", desc: "모두를 위한 물과 위생의 가용성 및 지속가능한 관리", color: "#26BDE2", Icon: Droplet },
+  { id: 7, shortTitle: "깨끗한 에너지", title: "Affordable Energy", desc: "지속가능한 현대적 에너지에 대한 접근 보장", color: "#FCC30B", Icon: Sun },
+  { id: 8, shortTitle: "양질의 일자리", title: "Decent Work", desc: "지속적·포용적 경제성장 및 양질의 일자리 증진", color: "#A21942", Icon: TrendingUp },
+  { id: 9, shortTitle: "산업,혁신 인프라", title: "Industry & Infra", desc: "회복력 있는 인프라 구축 및 혁신 촉진", color: "#FD6925", Icon: Factory },
+  { id: 10, shortTitle: "불평등 감소", title: "Reduced Inequality", desc: "국가 내 및 국가 간 불평등 완화", color: "#DD1367", Icon: ArrowDownUp },
+  { id: 11, shortTitle: "지속가능 도시", title: "Sustainable Cities", desc: "포용적이고 안전하며 회복력 있는 도시 조성", color: "#FD9D24", Icon: Building },
+  { id: 12, shortTitle: "지속가능 소비", title: "Responsible Consumption", desc: "지속가능한 소비 및 생산 패턴 보장", color: "#C19438", Icon: RefreshCcw },
+  { id: 13, shortTitle: "기후변화 대응", title: "Climate Action", desc: "기후 변화와 그 영향에 대처하는 긴급 조치", color: "#3F7E44", Icon: Globe },
+  { id: 14, shortTitle: "해양 생태계", title: "Life Below Water", desc: "해양 자원의 보존 및 지속가능한 이용", color: "#0A97D9", Icon: Waves },
+  { id: 15, shortTitle: "육상 생태계", title: "Life on Land", desc: "육상 생태계의 보호 및 생물다양성 손실 중단", color: "#56C02B", Icon: Leaf },
+  { id: 16, shortTitle: "평화와 정의", title: "Peace & Justice", desc: "평화롭고 포용적인 사회 증진 및 제도 구축", color: "#00689D", Icon: Scale },
+  { id: 17, shortTitle: "글로벌 파트너십", title: "Partnerships", desc: "이행 수단 강화 및 글로벌 파트너십 활성화", color: "#19486A", Icon: Link }
+];
+
+const SPEECH_TEMPLATE = `Hello, everyone. My name is [Your Name].
+Today, I want to talk about [Issue Topic].
+I recently read a news article about this from [News Source].
+This issue is related to SDG number [Number].
+
+This problem is very serious in our world.
+Many people are suffering because of [Cause].
+It also has a bad effect on our environment and society.
+We need to find a way to solve this together.
+
+I have a dream of becoming a [Job Name].
+I am very interested in this field because [Reason].
+To help others, I have been studying [Subject] very hard.
+My goal is to make a positive change in the future.
+
+If I become a [Job Name], I will try my best to help.
+First, I will [Action 1].
+Second, I will work with other people to [Action 2].
+I believe these actions can help achieve SDG number [Number].
+
+In the future, I want to see a better world.
+Small actions can change the whole world.
+Let's start thinking about our global neighbors today.
+Thank you for listening to my speech.`;
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('info'); 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showPassModal, setShowPassModal] = useState(false);
+  const [passInput, setPassInput] = useState('');
+  
+  // Form States
+  const [studentId, setStudentId] = useState('');
+  const [studentName, setStudentName] = useState('');
+  const [speechContent, setSpeechContent] = useState('');
+  const [koreanSummary, setKoreanSummary] = useState('');
+  const [selectedSDGForm, setSelectedSDGForm] = useState(null);
+  
+  // UI States
+  const [selectedSDGInfo, setSelectedSDGInfo] = useState(null); 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  
+  // Teacher Admin State
+  const [submissions, setSubmissions] = useState([]);
+  const [selectedEntry, setSelectedEntry] = useState(null);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+      setSubmissions(data);
+    });
+    return () => unsubscribe();
+  }, [user, isAdmin]);
+
+  const engSentenceCount = speechContent.trim() ? speechContent.split(/[.!?]+/).filter(s => s.trim().length > 0).length : 0;
+  const korSentenceCount = koreanSummary.trim() ? koreanSummary.split(/[.!?]+/).filter(s => s.trim().length > 0).length : 0;
+
+  const handleApplyEasyOutline = () => {
+    setSpeechContent(SPEECH_TEMPLATE);
+    setActiveTab('submit');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAdminAuth = (e) => {
+    e.preventDefault();
+    if (passInput === '1055') {
+      setIsAdmin(true);
+      setShowPassModal(false);
+      setPassInput('');
+    } else {
+      alert('비밀번호가 올바르지 않습니다.');
+      setPassInput('');
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+    if (studentId.length !== 5) { alert('학번 5자리를 정확히 입력해주세요.'); return; }
+    if (!studentName || !speechContent || !koreanSummary) { alert('모든 항목을 입력해주세요.'); return; }
+
+    setIsSubmitting(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), {
+        studentId, studentName, speechContent, koreanSummary,
+        selectedSDG: selectedSDGForm ? selectedSDGForm.id : 'None',
+        engSentenceCount, korSentenceCount,
+        timestamp: serverTimestamp(),
+        userId: user.uid
+      });
+      setIsSubmitted(true);
+      setSpeechContent('');
+      setKoreanSummary('');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      alert('제출 중 오류가 발생했습니다.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-100 font-sans text-slate-900">
+        <header className="bg-slate-900 text-white py-4 px-6 sticky top-0 z-50">
+          <div className="max-w-6xl mx-auto flex items-center justify-between">
+            <h1 className="text-lg font-bold flex items-center gap-2">
+              <Settings className="w-5 h-5 text-indigo-400" />
+              배정고 공통영어 수행평가 관리자
+            </h1>
+            <button onClick={() => setIsAdmin(false)} className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-bold transition-colors text-white">
+              학생 화면으로
+            </button>
+          </div>
+        </header>
+        <main className="max-w-6xl mx-auto py-6 px-4">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+              <h2 className="font-bold text-slate-700 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-500" />
+                제출 현황 ({submissions.length}건)
+              </h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+                    <th className="px-4 py-3 font-bold">학번</th>
+                    <th className="px-4 py-3 font-bold">이름</th>
+                    <th className="px-4 py-3 font-bold text-center">SDG</th>
+                    <th className="px-4 py-3 font-bold text-center">영어(20+)</th>
+                    <th className="px-4 py-3 font-bold text-center">한글(10+)</th>
+                    <th className="px-4 py-3 font-bold">제출 시간</th>
+                    <th className="px-4 py-3 font-bold text-center">상세</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {submissions.map((entry) => {
+                    const sdgColor = sdgs.find(s => s.id === entry.selectedSDG)?.color || '#94a3b8';
+                    return (
+                      <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-4 py-3 font-mono font-bold text-indigo-600">{entry.studentId}</td>
+                        <td className="px-4 py-3 font-bold text-slate-800">{entry.studentName}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold text-white" style={{ backgroundColor: sdgColor }}>
+                            G{entry.selectedSDG}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          <span className={entry.engSentenceCount >= 20 ? 'text-green-600' : 'text-orange-500'}>{entry.engSentenceCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          <span className={entry.korSentenceCount >= 10 ? 'text-green-600' : 'text-orange-500'}>{entry.korSentenceCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-500">
+                          {entry.timestamp ? new Date(entry.timestamp.seconds * 1000).toLocaleString('ko-KR') : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => setSelectedEntry(entry)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                            <ExternalLink className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </main>
+        {selectedEntry && (
+          <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-3xl max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">{selectedEntry.studentId} {selectedEntry.studentName}</h3>
+                  <p className="text-xs text-slate-500">Goal {selectedEntry.selectedSDG}: {sdgs.find(s=>s.id === selectedEntry.selectedSDG)?.shortTitle}</p>
+                </div>
+                <button onClick={() => setSelectedEntry(null)} className="p-1.5 hover:bg-slate-200 rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto space-y-6">
+                <section>
+                  <h4 className="text-xs font-black text-indigo-600 uppercase tracking-widest mb-2 flex items-center gap-1"><Type className="w-3 h-3" /> 영어 대본</h4>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm leading-relaxed whitespace-pre-wrap italic text-slate-700">
+                    {selectedEntry.speechContent}
+                  </div>
+                </section>
+                <section>
+                  <h4 className="text-xs font-black text-emerald-600 uppercase tracking-widest mb-2 flex items-center gap-1"><Languages className="w-3 h-3" /> 한글 요약</h4>
+                  <div className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100 text-sm leading-relaxed whitespace-pre-wrap text-slate-700">
+                    {selectedEntry.koreanSummary}
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <header className="bg-gradient-to-r from-indigo-700 to-blue-600 text-white py-6 px-4 shadow-md relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 relative z-10">
+          <div className="flex items-center gap-3">
+            <Globe className="w-8 h-8 text-blue-100 animate-pulse" />
+            <div>
+              <h1 className="text-2xl font-black tracking-tight leading-tight">Global Issue & Career Vision</h1>
+              <p className="text-indigo-100 text-sm font-medium">배정고 1학년 공통영어 수행평가</p>
+            </div>
+          </div>
+          <div className="flex gap-2 text-white">
+            <div className="bg-black/20 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
+              <span className="text-[10px] font-bold opacity-70">ENG</span>
+              <span className="text-sm font-black">20문장</span>
+            </div>
+            <div className="bg-black/20 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
+              <span className="text-[10px] font-bold opacity-70">KOR</span>
+              <span className="text-sm font-black">10문장</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <nav className="max-w-4xl mx-auto mt-4 px-4 sticky top-2 z-40">
+        <div className="flex bg-white/95 backdrop-blur-md rounded-xl shadow-sm border border-slate-200 p-1">
+          <button onClick={() => setActiveTab('info')} className={`flex-1 py-2.5 px-2 rounded-lg flex items-center justify-center gap-1.5 text-sm font-bold transition-all ${activeTab === 'info' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+            <Target className="w-4 h-4" /> <span className="hidden sm:inline">SDG 선택</span>
+          </button>
+          <button onClick={() => setActiveTab('template')} className={`flex-1 py-2.5 px-2 rounded-lg flex items-center justify-center gap-1.5 text-sm font-bold transition-all border-x border-slate-100 ${activeTab === 'template' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+            <Lightbulb className="w-4 h-4" /> <span className="hidden sm:inline">작성 가이드</span>
+          </button>
+          <button onClick={() => setActiveTab('submit')} className={`flex-1 py-2.5 px-2 rounded-lg flex items-center justify-center gap-1.5 text-sm font-bold transition-all ${activeTab === 'submit' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+            <Send className="w-4 h-4" /> <span className="hidden sm:inline">과제 제출</span>
+          </button>
+        </div>
+      </nav>
+
+      <main className="max-w-4xl mx-auto py-6 px-4 pb-20">
+        {activeTab === 'info' && (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl flex items-center gap-3 text-blue-800">
+              <Info className="w-5 h-5 flex-shrink-0 text-blue-600" />
+              <p className="text-sm font-medium">아래 SDGs 포스터의 <strong>칸을 직접 클릭</strong>하여 상세 내용을 확인해 보세요!</p>
+            </div>
+
+            {/* 그리드 포스터 (내장 아이콘을 사용하여 에러 100% 방지) */}
+            <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {/* 1번 슬롯: 로고 */}
+                <div className="aspect-square bg-white flex flex-col items-center justify-center border-2 border-slate-100 p-2 shadow-sm rounded-lg text-center">
+                  <Globe className="w-6 h-6 text-[#00A99D] mb-1" />
+                  <p className="text-[#00A99D] font-black text-[9px] sm:text-[11px] leading-tight">지속가능발전<br/>목표 (SDGs)</p>
+                </div>
+
+                {/* 17개 목표 버튼 (Lucide 아이콘 적용) */}
+                {sdgs.map((sdg) => {
+                  const IconComponent = sdg.Icon;
+                  return (
+                    <button 
+                      key={sdg.id} 
+                      onClick={() => setSelectedSDGInfo(sdg)} 
+                      className={`aspect-square relative flex flex-col items-center justify-center p-2 text-white transition-all duration-300 hover:brightness-110 active:scale-95 rounded-lg overflow-hidden shadow-sm ${selectedSDGInfo?.id === sdg.id ? 'ring-4 ring-indigo-500 ring-offset-2 z-10 scale-105' : ''}`}
+                      style={{ backgroundColor: sdg.color }}
+                    >
+                      <span className="absolute top-1 left-2 font-black text-sm opacity-90">{sdg.id}</span>
+                      <IconComponent className="w-7 h-7 sm:w-8 sm:h-8 mt-2 opacity-95" strokeWidth={1.8} />
+                      <span className="font-bold text-[9px] sm:text-[11px] mt-1.5 leading-tight tracking-tight text-center whitespace-pre-wrap">{sdg.shortTitle}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedSDGInfo && (
+              <div className="p-6 bg-white rounded-2xl border-2 border-indigo-500 shadow-lg animate-in slide-in-from-bottom-4 duration-300">
+                <div className="flex items-center gap-4 mb-3">
+                  <div 
+                    className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden shadow-md flex items-center justify-center text-white" 
+                    style={{ backgroundColor: selectedSDGInfo.color }}
+                  >
+                    <selectedSDGInfo.Icon className="w-8 h-8" strokeWidth={1.5} />
+                  </div>
+                  <div>
+                    <h4 className="text-xl font-bold text-slate-800">{selectedSDGInfo.title}</h4>
+                    <p className="text-indigo-600 font-bold text-sm">#{selectedSDGInfo.id} {selectedSDGInfo.shortTitle.replace('\n', ' ')}</p>
+                  </div>
+                </div>
+                <p className="text-slate-600 font-medium mb-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  {selectedSDGInfo.desc}
+                </p>
+                <div className="flex justify-end">
+                  <button 
+                    onClick={() => { setSelectedSDGForm(selectedSDGInfo); setActiveTab('submit'); window.scrollTo(0,0); }} 
+                    className="text-sm font-bold bg-indigo-600 text-white px-5 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-md shadow-indigo-100"
+                  >
+                    이 주제로 과제 시작하기 <ChevronRight className="w-4 h-4 text-white" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'template' && (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800">
+                  <Smile className="text-yellow-500" /> 쉬운 표현 사전
+                </h2>
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-[11px] font-black text-slate-400 mb-2 uppercase tracking-widest">문장 이어주기</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {["Also", "However", "Therefore", "First", "Finally"].map(w => (
+                        <span key={w} className="px-3 py-1 bg-slate-50 border border-slate-100 text-slate-600 rounded-lg text-xs font-bold">{w}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-black text-slate-400 mb-2 uppercase tracking-widest">나의 의견</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {["I believe", "I am worried", "I want to", "It is important"].map(w => (
+                        <span key={w} className="px-3 py-1 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg text-xs font-bold">{w}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-indigo-600 p-6 rounded-2xl text-white shadow-md relative overflow-hidden flex flex-col justify-between">
+                <div>
+                  <h2 className="text-xl font-bold mb-2 flex items-center gap-2 text-white">
+                    <Sparkles className="w-5 h-5 text-yellow-300" /> 템플릿 사용법
+                  </h2>
+                  <p className="text-indigo-100 text-sm mb-4 leading-relaxed">
+                    20문장을 채우기 막막하다면 아래 버튼을 눌러 <strong>가이드 대본</strong>을 불러오세요. 대괄호 속 내용만 바꾸면 됩니다!
+                  </p>
+                </div>
+                <button onClick={handleApplyEasyOutline} className="w-full py-3.5 bg-white text-indigo-700 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-indigo-50 transition-all shadow-sm">
+                  대본 템플릿 불러오기 <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'submit' && (
+          <div className="animate-in fade-in duration-300">
+            {isSubmitted ? (
+              <div className="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce"><CheckCircle className="w-10 h-10" /></div>
+                <h2 className="text-2xl font-black mb-2 text-slate-800">과제 제출 성공!</h2>
+                <p className="text-slate-500 text-sm mb-8">여러분의 멋진 비전이 선생님께 전달되었습니다.</p>
+                <button onClick={() => setIsSubmitted(false)} className="px-10 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all text-sm">새 과제 작성하기</button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="bg-white p-6 md:p-10 rounded-2xl shadow-sm border border-slate-200 space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 flex items-center gap-1.5 font-bold text-slate-700"><Hash className="w-3.5 h-3.5 text-indigo-500" /> 학번 (5자리)</label>
+                    <input type="text" placeholder="예: 10101" maxLength={5} value={studentId} onChange={(e) => setStudentId(e.target.value.replace(/[^0-9]/g, ''))} className="w-full px-4 py-3.5 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none transition-all font-bold text-sm bg-slate-50" required />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 flex items-center gap-1.5 font-bold text-slate-700"><User className="w-3.5 h-3.5 text-indigo-500" /> 이름</label>
+                    <input type="text" placeholder="본인 성함" value={studentName} onChange={(e) => setStudentName(e.target.value)} className="w-full px-4 py-3.5 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none transition-all font-bold text-sm bg-slate-50" required />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-600 font-bold text-slate-700">선택한 SDG 목표</label>
+                  <div className="relative">
+                    <select 
+                      className="w-full px-4 py-3.5 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none appearance-none bg-slate-50 cursor-pointer text-sm font-bold"
+                      onChange={(e) => setSelectedSDGForm(sdgs.find(s => s.id === parseInt(e.target.value)))}
+                      value={selectedSDGForm?.id || ""}
+                      required
+                    >
+                      <option value="" disabled>발표할 주제를 선택하세요</option>
+                      {sdgs.map(s => <option key={s.id} value={s.id}>{s.id}. {s.shortTitle.replace('\n', ' ')} ({s.title})</option>)}
+                    </select>
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"><ChevronRight className="w-4 h-4 rotate-90" /></div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-black text-indigo-700 flex items-center gap-1.5 font-bold"><Type className="w-4 h-4" /> 영어 발표 대본 (20문장 필수)</label>
+                    <div className={`px-2.5 py-1 rounded-lg font-black text-[10px] border shadow-sm ${engSentenceCount >= 20 ? 'bg-green-50 text-green-600 border-green-200' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                      {engSentenceCount}/20 문장
+                    </div>
+                  </div>
+                  <textarea rows={14} value={speechContent} onChange={(e) => setSpeechContent(e.target.value)} placeholder="영어 대본을 입력하세요." className="w-full px-5 py-5 rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none transition-all resize-none font-sans text-sm leading-relaxed bg-slate-50/50" required></textarea>
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-black text-emerald-700 flex items-center gap-1.5 font-bold"><Languages className="w-4 h-4" /> 한글 요약 (10문장 필수)</label>
+                    <div className={`px-2.5 py-1 rounded-lg font-black text-[10px] border shadow-sm ${korSentenceCount >= 10 ? 'bg-green-50 text-green-600 border-green-200' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
+                      {korSentenceCount}/10 문장
+                    </div>
+                  </div>
+                  <textarea rows={6} value={koreanSummary} onChange={(e) => setKoreanSummary(e.target.value)} placeholder="내용을 한국어로 요약해 주세요." className="w-full px-5 py-5 rounded-2xl border border-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 outline-none transition-all resize-none font-sans text-sm leading-relaxed bg-slate-50/50" required></textarea>
+                </div>
+                <button type="submit" disabled={isSubmitting} className={`w-full py-5 rounded-2xl font-black text-white flex items-center justify-center gap-2 shadow-lg transition-all ${isSubmitting ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98]'}`}>
+                  {isSubmitting ? '처리 중...' : <><Send className="w-5 h-5 text-white" /> 과제 최종 제출하기</>}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Admin Password Modal */}
+      {showPassModal && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                <Lock className="w-4 h-4 text-indigo-600" /> 교사 인증
+              </h3>
+              <button onClick={() => { setShowPassModal(false); setPassInput(''); }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleAdminAuth} className="space-y-4">
+              <input type="password" autoFocus value={passInput} onChange={(e) => setPassInput(e.target.value)} placeholder="비밀번호 4자리" className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-center text-2xl font-black tracking-widest text-indigo-600" />
+              <button type="submit" className="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold shadow-md hover:bg-indigo-700 text-white">인증하기</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <footer className="bg-white border-t border-slate-200 py-10 px-6 text-center text-slate-400">
+        <div className="max-w-4xl mx-auto flex flex-col items-center gap-3">
+          <p className="text-sm font-bold tracking-tight">배정고등학교 1학년 공통영어 수행평가 시스템</p>
+          <button onClick={() => setShowPassModal(true)} className="text-[10px] font-bold text-slate-300 hover:text-indigo-400 flex items-center gap-1 transition-colors mt-2">
+            <Settings className="w-3 h-3" /> 관리자
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default App;
